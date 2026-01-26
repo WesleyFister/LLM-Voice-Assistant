@@ -148,6 +148,9 @@ class llmVoiceAssistantClient():
         # Initialize VAD state
         state = np.zeros((2, 1, 128), dtype=np.float32)
 
+        ema_alpha = 0.3          # smoothing strength
+        ema_confidence = 0.0     # initial EMA value
+
         # Send user audio data to the server.
         while silence < delay or voiceDetected == False:
             if self.no_wakeword == True:
@@ -191,7 +194,14 @@ class llmVoiceAssistantClient():
             # Get the confidences
             outs = session.run(None, inputs)
             new_confidence, state = outs  # model outputs [speech_prob, new_state]
-            if new_confidence >= 0.3:
+
+            # EMA smoothing
+            ema_confidence = (
+                ema_alpha * float(new_confidence)
+                + (1.0 - ema_alpha) * ema_confidence
+            )
+
+            if ema_confidence >= 0.3:
                 delay = vad_delay
                 delay2 = vad_delay
                 silence = 0
