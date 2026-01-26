@@ -1,4 +1,5 @@
 from openwakeword.model import Model
+from scipy.signal import resample_poly
 import openwakeword
 import pyaudio
 import numpy as np
@@ -21,19 +22,29 @@ def wakeWord(model):
 
     p = pyaudio.PyAudio()
 
+    default_input_info = p.get_default_input_device_info()
     FORMAT = pyaudio.paInt16
-    CHANNELS = 1
-    RATE = 16000
-    CHUNK = 1280
+    RATE = int(default_input_info['defaultSampleRate'])  # e.g., 44100, 48000, etc.
+    CHANNELS = default_input_info['maxInputChannels']    # e.g., 1 or 2
+    CHUNK = int(default_input_info['defaultSampleRate'] / 10)
 
     stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
 
-    
     print("Listening for wake word...")
-
     sentinel = False
     while True:
-        audio = np.frombuffer(stream.read(CHUNK, False), dtype=np.int16)
+        # Read raw audio
+        data = stream.read(CHUNK, False)
+        audio = np.frombuffer(data, dtype=np.int16)
+
+        # Convert to mono if multi-channel
+        if CHANNELS > 1:
+            audio = audio.reshape(-1, CHANNELS).mean(axis=1)
+
+        # Downsample to 16kHz
+        if RATE != 16000:
+            audio = resample_poly(audio, 16000, RATE)
+
         prediction = model.predict(x=audio, threshold={'hey jarvis': 0.9}, debounce_time=5.0)
 
         for mdl in model.prediction_buffer.keys():

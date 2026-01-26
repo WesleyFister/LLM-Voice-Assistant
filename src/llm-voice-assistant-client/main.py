@@ -1,6 +1,7 @@
 from wakeWord import wakeWord
 from textToText import textToText
 from textToSpeech import textToSpeech
+from scipy.signal import resample_poly
 import os
 import time
 import tomllib
@@ -25,13 +26,13 @@ class llmVoiceAssistantClient():
         with open("config.toml", 'rb') as f:
             config = tomllib.load(f)
         
-        # num_samples / SAMPLE_RATE = seconds of audio
+        # num_samples / RATE = seconds of audio
         # In this case it is 0.032 seconds.
-        mult = 31.25
+        self.mult = 31.25
         self.wakeword_model = config['wakeword']['model']
-        self.recording_length = int(30 * mult)
-        self.vad_initial_delay = int(config['vad']['initial_delay'] * mult)
-        self.vad_delay = int(config['vad']['delay'] * mult)
+        self.recording_length = 30
+        self.vad_initial_delay = config['vad']['initial_delay']
+        self.vad_delay = config['vad']['delay']
         self.no_wakeword = config['wakeword']['disable_wakeword']
         if config['chat']['history'] == "":
             self.chat_history = f"chat-history/chat-history-{os.urandom(8).hex()}.json"
@@ -118,24 +119,27 @@ class llmVoiceAssistantClient():
             play_obj = audioFile.play()
 
         p = pyaudio.PyAudio()
+
+        default_input_info = p.get_default_input_device_info()
         FORMAT = pyaudio.paInt16
+        RATE = int(default_input_info['defaultSampleRate'])  # e.g., 44100, 48000, etc.
         CHANNELS = 1
-        SAMPLE_RATE = 16000
-        CHUNK = int(SAMPLE_RATE / 10)
-        num_samples = 512
+        CHUNK = int(RATE / 10)
+        num_samples = int(0.032 * RATE) # 0.032 is 32 milliseconds per frame.
 
         audioInput = 'audio-input/input-' + os.urandom(8).hex() + '.wav' 
         wf = wave.open(audioInput, 'wb')
         wf.setnchannels(CHANNELS)
         wf.setsampwidth(p.get_sample_size(FORMAT))
-        wf.setframerate(SAMPLE_RATE)
+        wf.setframerate(RATE)
 
-        stream = p.open(format=FORMAT, channels=CHANNELS, rate=SAMPLE_RATE, input=True, frames_per_buffer=CHUNK)
+        stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
 
         silence = 0
         voiceDetected = False
-        delay = self.vad_initial_delay
-        delay2 = self.recording_length
+        delay = int(self.vad_initial_delay / (num_samples / RATE))
+        delay2 = int(self.recording_length / (num_samples / RATE))
+        vad_delay = int(self.vad_delay / (num_samples / RATE))
         new_confidence = 1
         buffer_written = False
         buffer_size = 93
@@ -167,6 +171,10 @@ class llmVoiceAssistantClient():
 
             audio_int16 = np.frombuffer(audio_chunk, np.int16)
 
+            # Downsample to 16kHz
+            if RATE != 16000:
+                audio_int16 = resample_poly(audio_int16, 16000, RATE)
+
             # Check if amplitude is 0. This is necessary because if amplitude = 0 then it will crash the program. This needs to be fixed because it makes the VAD delay inconsistent.
             amplitude = np.max(np.abs(audio_int16))
             if amplitude == 0:
@@ -177,15 +185,15 @@ class llmVoiceAssistantClient():
             inputs = {
                 input_name: audio_float32[np.newaxis, :],
                 state_name: state,
-                sr_name: np.array(SAMPLE_RATE, dtype=np.int64),
+                sr_name: np.array(16000, dtype=np.int64),
             }
 
             # Get the confidences
             outs = session.run(None, inputs)
             new_confidence, state = outs  # model outputs [speech_prob, new_state]
             if new_confidence >= 0.3:
-                delay = self.vad_delay
-                delay2 = self.vad_delay
+                delay = vad_delay
+                delay2 = vad_delay
                 silence = 0
                 voiceDetected = True
 
