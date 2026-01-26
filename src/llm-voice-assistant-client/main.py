@@ -160,7 +160,7 @@ class llmVoiceAssistantClient():
                 print(f"\x1b[2K{silence}/{delay}", end="\r") # \x1b[2K ANSI sequence for clearing the current line.
 
             silence += 1
-            audio_chunk = stream.read(num_samples)
+            audio_chunk = stream.read(num_samples, exception_on_overflow=False)
 
             audio_buffer.append(audio_chunk)
             if voiceDetected == True:
